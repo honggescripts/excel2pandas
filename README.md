@@ -67,7 +67,7 @@ Excel 是业务的心脏，也是工程的沼泽。凡是"用 Excel 算钱"的�
 
 ### 1. 公式 → 代码：自动翻译，覆盖率可量化
 
-不是"支持常见函数"，而是**按 42 个内置函数 + AST 递归下降**逐列翻译，并明确告诉你**转成功了几个、失败了几个**。
+不是"支持常见函数"，而是**按 58 个内置函数 + AST 递归下降**逐列翻译，并明确告诉你**转成功了几个、失败了几个**。
 
 > 实测（百列量级的真实模板）：**公式列 100% 转换成功、0 失败。**
 
@@ -244,8 +244,9 @@ python probe/probe_template.py --file "你的报表.xlsx" --sheet "目标sheet" 
 
 | 亮点 | 说明 |
 |---|---|
-| **5 模块内聚架构** | `reader` / `converter` / `generator` / `runner` / `verifier` + `_runtime` + CLI，包本体 3638 行。模块边界按「职责 + 是否共享同一次遍历」划分，不按概念分文件 |
+| **5 模块内聚架构** | `reader` / `converter` / `generator` / `runner` / `verifier` + `_runtime` + CLI，包本体 4476 行。模块边界按「职责 + 是否共享同一次遍历」划分，不按概念分文件 |
 | **产物自包含** | 生成的 `.py` 内嵌运行时库，**不依赖本包、不需要安装 excel2pandas**，可以直接拷给同事跑 |
+| **runtime 按需内联** | 只内联正文**实际调用到**的 helper（演示案例 201 行），而不是把整库塞进去。依赖闭包由源码自动推导，不靠人维护依赖表；收完还做一次「调用了但没找到」检查，命中就在生成期报错 |
 | **指纹缓存** | 生成键 = 文件路径 + 大小 + mtime + sheet + 样板行 + 版本号。Excel 没变就跳过生成（`--force` 强制） |
 | **断点续传** | `--progress` + `--resume`，批量跑到一半中断可续 |
 | **失败降级不中断** | 分块批量失败 → 自动降级单条重试并记录是哪条挂了，不让一条坏数据带走整批 |
@@ -322,7 +323,24 @@ python generated_code.py SKU-10001
 
 文件底部自带 `__main__` 入口，转置打印结果。发给业务同事时**不需要任何环境说明**。
 
-### 5. 三分类输出：失败不静默
+「自包含」不是嘴上说的：`tests/test_selfcontained.py` 会把生成的代码拷到临时目录，在 **`excel2pandas` 不可导入**的解释器环境（cwd 隔离 + 清空 `PYTHONPATH`）里跑一遍，再与仓库内的结果逐值比对。
+
+### 5. 按需内联：文件里没有用不到的东西
+
+生成的 `.py` 把 helper **内联**（而不是 `import excel2pandas`），但**只内联正文真正调用到的那些**：
+
+| | `--runtime-mode full` | 按需内联（默认） |
+|---|---|---|
+| runtime 段 | 整库内联（随函数库一起长） | **只带用到的**（本例 201 行） |
+| 整个文件 | 1180 行 | **415 行** |
+
+依赖闭包由**源码自动推导**：扫正文里的 `_xxx` → 递归补齐它们自己的依赖 → 迭代到不动点。
+**不靠人维护依赖表** —— 手写的表一旦和实现脱节就会漏嵌，而漏嵌的后果是用户拿到文件才炸 `NameError`。
+这里连「漏」的机会都不留：闭包收完再做一次「调用了但 `_runtime.py` 里没有」的检查，命中就**在生成期直接报错**，并告诉你改用 `full`。
+
+两种模式输出**逐值一致**，有测试守着。
+
+### 6. 三分类输出：失败不静默
 
 | 类型 | 生成代码 | 输出列名 |
 |---|---|---|
@@ -373,11 +391,41 @@ python -m excel2pandas verify --code examples/generated_code.py \
     --report examples/verify_report.md
 ```
 
-**想从零重建上面全部产物**（含演示模板本身）：
+**想从零重建上面全部产物**（含演示模板本身），并顺带跑一遍单元测试与自包含验证：
 
 ```bash
 python examples/build_examples.py
 ```
+
+只跑测试：
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+### runtime 嵌入：按需（默认）还是全量
+
+生成代码**永远不 `import excel2pandas`**，helper 源码一律内联。区别只在**内联多少**：
+
+```bash
+# 默认 minimal：只内联正文用到的（演示案例 runtime 段 201 行、整文件 415 行）
+python -m excel2pandas generate --file examples/demo_template.xlsx \
+    --sheet "定价测算" --row 2 --out examples/
+
+# 回退 full：整库内联，最保险、文件最长（同一案例 1180 行）
+python -m excel2pandas generate --file examples/demo_template.xlsx \
+    --sheet "定价测算" --row 2 --out examples/ --runtime-mode full
+```
+
+Python API 同理，需要时一个开关回退：
+
+```python
+from excel2pandas import generate
+generate(excel_path="报表.xlsx", sheet_name="目标sheet", target_row=2,
+         out_dir="output", runtime_mode="full")
+```
+
+生成文件头部会写明用了哪种模式、内联了哪些 helper、需要 `pip install` 什么，打开就知道要不要装东西。
 
 ### 在 VSCode 里一键调试（不用敲命令）
 
@@ -422,14 +470,14 @@ python -m excel2pandas verify --code output/generated_code.py \
 
 ```
 excel2pandas/
-├── excel2pandas/                 包本体（5 模块 + 运行时库 + CLI + 调试入口，3638 行）
+├── excel2pandas/                 包本体（5 模块 + 运行时库 + CLI + 调试入口，4476 行）
 │   ├── reader.py        576 行   读簿建模型（双读 + 列建模 + 分层 + 冲突检测 + 评估报告）
-│   ├── converter.py    1150 行   公式 → AST → pandas 表达式（42 个函数注册 + 拓扑排序）
-│   ├── generator.py     503 行   编排 + 渲染 + CONFIG 文档 + 指纹缓存
+│   ├── converter.py    1316 行   公式 → AST → pandas 表达式（58 个函数注册 + 拓扑排序）
+│   ├── generator.py     703 行   编排 + 渲染 + runtime 按需裁剪 + CONFIG 文档 + 指纹缓存
 │   ├── runner.py        197 行   执行（单条 / 分块批量 / 断点续传 / 异常映射）
 │   ├── verifier.py      355 行   逐格对账（五类判定 + 列级容差 + Excel 侧错误归类）
-│   ├── _runtime.py      531 行   运行时辅助库（内嵌进生成代码）
-│   ├── __main__.py      187 行   CLI 路由
+│   ├── _runtime.py      998 行   运行时辅助库模板（按需裁剪后内嵌进生成代码）
+│   ├── __main__.py      192 行   CLI 路由
 │   └── _run.py          139 行   VSCode 本地调试入口（右键即跑，参数写死在文件顶部）
 ├── docs/产品设计方案.md           主文档：定位 / 架构 / 设计决策 / 语义陷阱清单 / 验收口径
 ├── examples/                     虚构演示案例（可一键复现）
@@ -437,6 +485,9 @@ excel2pandas/
 │   ├── config_names.json         业务常量的命名（由使用者提供，不进库代码）
 │   ├── build_examples.py         一键重建全部产物
 │   └── demo_template.xlsx        3 sheet：定价测算 + 运费价目 + 平台费率
+├── tests/                        单元测试 + 自包含验证
+│   ├── test_runtime.py           helper 的 Excel 语义单测（30 条：舍入 / 日期 / 文本 / 既有语义）
+│   └── test_selfcontained.py     在「本包不可导入」的环境里跑生成代码，证明真的自包含
 ├── probe/probe_template.py       模板探针
 ├── requirements.txt / pyproject.toml / .gitignore
 └── README.md
@@ -462,21 +513,26 @@ output/
 
 ### 函数支持
 
-**42 个注册函数**，另有跨表查找与条件聚合走**专用节点处理**（因为它们要生成临时列，不占注册表）：
+**58 个注册函数**，另有跨表查找与条件聚合走**专用节点处理**（因为它们要生成临时列，不占注册表）：
 
 | 类别 | 覆盖 | 机制 |
 |---|---|---|
 | 算术/比较 | `+ - * / ^ %`、`= <> < > <= >=`、字符串拼接 `&` | 运算符 |
 | 逻辑 | `IF / IFS / AND / OR / NOT / IFERROR / IFNA` | 注册 |
-| 数学 | `ABS / ROUND / ROUNDUP / ROUNDDOWN / INT / CEILING / FLOOR / MAX / MIN / SUM / PRODUCT / SQRT / MOD / POWER` | 注册 |
-| 文本 | `TEXTBEFORE / TEXTAFTER / CONCAT / TRIM / LEFT / RIGHT / LEN / VALUE` | 注册 |
+| 数学 | `ABS / ROUND / ROUNDUP / ROUNDDOWN / INT / CEILING / FLOOR / MROUND / MAX / MIN / SUM / PRODUCT / SQRT / MOD / POWER` | 注册 |
+| 日期 | `DATE / YEAR / MONTH / DAY / EOMONTH / EDATE / DAYS360 / YEARFRAC / NETWORKDAYS / WORKDAY / WEEKNUM` | 注册（返回 `datetime64`） |
+| 文本 | `TEXTBEFORE / TEXTAFTER / CONCAT / TEXTJOIN / SUBSTITUTE / PROPER / EXACT / TEXT / TRIM / LEFT / RIGHT / LEN / VALUE` | 注册（`TEXT` 仅白名单子集） |
 | 引用 | `ROW / COLUMN`、同表引用、`$` 绝对/混合引用、表头行引用（`$A$1`） | 注册 + 渲染 |
 | 查找 | `XLOOKUP`（含 `if_not_found`）/ `VLOOKUP`（精确）/ `INDEX(列, MATCH(...))` | **专用节点** → 临时列 |
 | 条件聚合 | `SUMIFS / COUNTIFS / AVERAGEIFS / MAXIFS / MINIFS` | **专用节点** → 临时列 |
 | 财务 | `RATE / FV / PV / PMT / NPER / IPMT / CUMIPMT` | 注册（`numpy_financial`） |
 
-> ⚠️ 口径说明：`TEXT`、`HLOOKUP`、`LOOKUP`、单独的 `MATCH` **在代码里能识别但主动拒绝**——分别抛「不支持 TEXT 格式化」「暂不支持」。
+> ⚠️ 口径说明：**识别但主动拒绝**的仍然有——`HLOOKUP`、`LOOKUP`、单独的 `MATCH`、`NETWORKDAYS.INTL`（周末参数语义不同）抛「暂不支持」。
 > 主动拒绝而不是静默降级，是为了让这类列**明确落到失败列**，而不是生成一份看起来正常、实际算错的代码。
+>
+> **两条刻意保留的边界**（宁可报错，不猜）：
+> - **`TEXT` 只实现白名单子集**：数值（`0` / `0.00` / `#,##0.00`）、百分比、常见日期（`yyyy-mm-dd` / `yyyy年m月d日` 等）。不在白名单里的格式**在转换期就报错**，该列照常进失败列报告——而不是运行时才崩，更不是静默拼出一个错的字符串。
+> - **`YEARFRAC` 的 `basis=1`（Actual/Actual）不实现。** Excel 对它有多条与版本相关的闰年边界规则，没有逐例校准就实现等于埋雷；碰到直接报错，请改用 `basis=0/2/3/4`。
 
 **新增函数**：注册表接口
 
@@ -503,6 +559,8 @@ def _f_my_func(args, node, ctx):
 | 5 | **`ROUND` 不是 numpy 的 round** | Excel 是「四舍五入远离零」（`ROUND(2.5,0)=3`），numpy 是银行家舍入（`=2`）。运行时用 `_round`/`_roundup`/`_rounddown` 复现 Excel 语义 |
 | 6 | **Excel 侧错误要单独归类** | pandas 把 `#REF!`/`#N/A` 读成 `NaN`，会被误判成「空值」或「逻辑差异」。对账器额外用 openpyxl 读原始缓存值，归为 **Excel侧错误**，不计入一致率分母 |
 | 7 | **常量命名映射的键格式** | 键由 `_skey(值)` 生成，**小数点写成下划线**：`0.12 → "0_12"`、`0.05 → "0_05"`、`-0.5 → "neg0_5"`。写成 `"0.12"` 永远查不到 |
+| 8 | **`CEILING`/`FLOOR` 对负数的方向** | Excel 的 `CEILING` 是「远离零」、`FLOOR` 是「向零」。直接写 `np.ceil(V/N)*N` / `np.floor(V/N)*N` 得到的是「向正/负无穷」：`CEILING(-2.1,1)` 会给 `-2`，Excel 是 `-3`。运行时按符号拆开实现 |
+| 9 | **`MROUND` 要求两参数同号** | `MROUND(-1.5, 1)` 在 Excel 里是 `#NUM!`，不是 `-2`；且结果的符号跟随被舍入的数（`MROUND(-10,-3) = -9`）。异号统一映射成 `NaN` |
 
 ### 3+1 层执行模型（分层只作统计）
 
@@ -547,6 +605,7 @@ Layer 3      其他公式        算术 / IF / ROUND / CEILING / RATE / FV / CUM
 |---|---|
 | [`docs/产品设计方案.md`](docs/产品设计方案.md) | **主文档。** 产品定位 + 5 模块架构 + 核心设计决策 + Excel 语义陷阱清单 + 验收口径 |
 | [`examples/`](examples/) | 可直接运行的演示案例（虚构的电商定价场景） |
+| [`tests/`](tests/) | helper 的 Excel 语义单元测试 + 生成代码自包含验证，`python -m unittest discover -s tests` |
 | `README.md`（本文） | 业务/财务视角的痛点与覆盖范围 · 报表规范改造与准入约束 · 能力边界 · 技术路径 · 亮点 · 快速开始 · 已知坑 |
 
 ---
