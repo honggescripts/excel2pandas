@@ -376,6 +376,21 @@ python -m excel2pandas verify --code examples/generated_code.py \
 python examples/build_examples.py
 ```
 
+### 在 VSCode 里一键调试（不用敲命令）
+
+`excel2pandas/_run.py` 是参数写死的本地调试入口 —— **改完参数保存，右键 → `Run Python File`**，一次跑完「生成 → 单条运行 → 对账」三步并打印一致率：
+
+```python
+EXCEL = _PROJ_ROOT / "examples" / "demo_template.xlsx"
+SHEET = "定价测算"
+ROW = 2                      # 样板行（带公式的那一行）
+HEADER_ROW = 1
+KEY = "SKU-10001"
+```
+
+默认指向仓库自带的演示案例，开箱即用；换成自己的表只改这一小段即可。文件内已处理两件容易踩的事：
+把包的上一级加进 `sys.path`（否则右键运行会因为相对导入失败而报 `ImportError`）、路径全部按**项目根目录**解析（所以 VSCode 从任意位置点运行都不会跑偏）。输出统一落在 `output/`，已被 `.gitignore` 忽略。
+
 ### 接手自己的报表（四步）
 
 ```bash
@@ -404,14 +419,15 @@ python -m excel2pandas verify --code output/generated_code.py \
 
 ```
 excel2pandas/
-├── excel2pandas/                 包本体（5 模块 + 运行时库 + CLI，3506 行）
+├── excel2pandas/                 包本体（5 模块 + 运行时库 + CLI + 调试入口，3645 行）
 │   ├── reader.py        576 行   读簿建模型（双读 + 列建模 + 分层 + 冲突检测 + 评估报告）
 │   ├── converter.py    1150 行   公式 → AST → pandas 表达式（42 个函数注册 + 拓扑排序）
 │   ├── generator.py     510 行   编排 + 渲染 + CONFIG 文档 + 指纹缓存
 │   ├── runner.py        197 行   执行（单条 / 分块批量 / 断点续传 / 异常映射）
 │   ├── verifier.py      355 行   逐格对账（五类判定 + 列级容差 + Excel 侧错误归类）
 │   ├── _runtime.py      531 行   运行时辅助库（内嵌进生成代码）
-│   └── __main__.py      187 行   CLI 路由
+│   ├── __main__.py      187 行   CLI 路由
+│   └── _run.py          139 行   VSCode 本地调试入口（右键即跑，参数写死在文件顶部）
 ├── docs/产品设计方案.md           主文档：定位 / 架构 / 设计决策 / 语义陷阱清单 / 验收口径
 ├── examples/                     虚构演示案例（可一键复现）
 │   ├── make_demo_template.py     造演示模板（含公式 + 缓存值）
