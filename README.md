@@ -1,5 +1,7 @@
 # excel2pandas
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 > **把 Excel 里的业务公式，变成能批量跑、能逐格对账、能进 Git 的 Pandas 代码。**
 
 一句话说清它解决的问题：**业务规则活在 Excel 的公式里——而 Excel 跑不了批量、进不了版本库、没人敢改。**
@@ -526,3 +528,15 @@ Layer 3      其他公式        算术 / IF / ROUND / CEILING / RATE / FV / CUM
 | [`docs/产品设计方案.md`](docs/产品设计方案.md) | **主文档。** 产品定位 + 5 模块架构 + 核心设计决策 + Excel 语义陷阱清单 + 验收口径 |
 | [`examples/`](examples/) | 可直接运行的演示案例（虚构的电商定价场景） |
 | `README.md`（本文） | 业务/财务视角的痛点与覆盖范围 · 报表规范改造与准入约束 · 能力边界 · 技术路径 · 亮点 · 快速开始 · 已知坑 |
+
+---
+
+## 许可
+
+本项目采用 **MIT License** 开源，全文见 [`LICENSE`](LICENSE)。
+
+也就是说，你可以自由地使用、复制、修改、合并、发布、分发、再授权甚至出售本项目，**唯一的要求是在副本或实质性部分中保留原始的版权声明和许可声明**。
+
+> 补充说明两点：
+> 1. 本项目的运行依赖均为宽松许可（`pandas` = BSD-3-Clause、`openpyxl` = MIT、`numpy-financial` = BSD-3-Clause），与 MIT 兼容，不构成额外约束。
+> 2. **本项目按「原样」提供，不附带任何明示或暗示的担保。** 它生成的代码在财务/定价等场景落地前，请务必用「逐格对账」口径自行验证一致率——README 与文档中反复强调的「一致率」就是为此设计的。

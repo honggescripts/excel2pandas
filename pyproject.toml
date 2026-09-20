@@ -7,6 +7,8 @@ name = "excel2pandas"
 version = "0.1.0"
 description = "把 Excel 模板公式翻译成可读、可对账、可维护的 Pandas 代码"
 readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Shihong Yu" }]
 requires-python = ">=3.9"
 dependencies = [
     "pandas>=2.0",
