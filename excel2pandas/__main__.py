@@ -2,10 +2,10 @@
 """
 __main__.py —— 命令行入口（薄壳，只有 argparse 路由，无业务逻辑）
 
-    python -m excel2pandas generate --file book.xlsx --sheet "报价模型" --row 2 --out output/
-    python -m excel2pandas run      --code output/generated_code.py --key "LNBSC..."
+    python -m excel2pandas generate --file examples/demo_template.xlsx --sheet "定价测算" --row 2 --out output/
+    python -m excel2pandas run      --code output/generated_code.py --key "SKU-10001"
     python -m excel2pandas run      --code output/generated_code.py --keys keys.csv --progress output/progress.json --resume
-    python -m excel2pandas verify   --code output/generated_code.py --excel book.xlsx --sheet "报价模型" --report output/verify_report.md
+    python -m excel2pandas verify   --code output/generated_code.py --excel examples/demo_template.xlsx --sheet "定价测算" --report output/verify_report.md
 """
 from __future__ import annotations
 

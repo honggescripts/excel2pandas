@@ -668,7 +668,7 @@ class RenderCtx:
     def col_expr(self, letter: str) -> str:
         c = self.model.pick(letter)
         expr = f"df[{c.name!r}]"
-        # 缓存值是「数字样式的文本」（如 CE 列的 '7.5%'）-> 参与运算前先数值化，
+        # 缓存值是「数字样式的文本」（如 '7.5%'、'3,900'）-> 参与运算前先数值化，
         # 复现 Excel 的隐式转换，否则 '7.5%'/12 会抛 TypeError。
         if getattr(c, "cached_numeric_text", False):
             expr = f"_n({expr})"
@@ -895,7 +895,7 @@ def render(node: Any, ctx: RenderCtx) -> str:
             raise FormulaError(f"未提升的跨表引用 {node.sheet}!{node.col}")
         if node.row is None:
             raise FormulaError(f"整列引用 {node.col}:{node.col} 只能出现在查找/聚合函数里")
-        # 表头行常量（如 AR$1 取「提前还款期数」表头值）
+        # 表头行常量（如 A$1，把表头文字当作参数值取出来）
         if node.row == model.header_row:
             m = model.pick(node.col)
             raw = m.header if m else ""

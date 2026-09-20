@@ -205,7 +205,7 @@ def verify(result_df: pd.DataFrame,
     ex = ex[ex[pk].astype(str).isin(keys)]
     rep.matched_rows = len(ex)
     if ex.empty:
-        rep.notes.append("⚠️ Excel 侧没有与结果主键匹配的行 —— 本文件只能对账「模板里已存在的样板车」")
+        rep.notes.append("⚠️ Excel 侧没有与结果主键匹配的行 —— 本文件只能对账「模板里已存在的样板行」")
         return rep
 
     tol = dict(column_tolerance or {})

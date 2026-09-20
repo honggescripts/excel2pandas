@@ -53,7 +53,7 @@ def is_excel_error(v: Any) -> bool:
 def parse_numeric_text(v: Any) -> Optional[float]:
     """'7.5%' -> 0.075、'3,900' -> 3900.0；不是数字文本则 None。
 
-    Excel 在算术运算里会隐式把这类文本转成数字（本模板 CE 列就是 '7.5%'），
+    Excel 在算术运算里会隐式把这类文本转成数字，
     生成代码必须复现这个行为，否则 '7.5%'/12 会直接抛 TypeError。
     """
     if not isinstance(v, str):
@@ -228,7 +228,7 @@ def extract_refs(formula: str, sheet: str, known_sheets: Set[str]) -> RefInfo:
     """
     解析公式里所有引用。
     步骤：① 先把带 sheet 前缀的引用整体遮蔽并登记；② 再在剩余文本里找同表引用。
-    这样 `'台账'!B:B` 不会被误当成同表 B 列。
+    这样 `'运费价目'!B:B` 不会被误当成同表 B 列。
     """
     out = RefInfo()
     body = formula.lstrip("=")
