@@ -668,8 +668,8 @@ class RenderCtx:
     def col_expr(self, letter: str) -> str:
         c = self.model.pick(letter)
         expr = f"df[{c.name!r}]"
-        # 缓存值是「数字样式的文本」（如 '7.5%'、'3,900'）-> 参与运算前先数值化，
-        # 复现 Excel 的隐式转换，否则 '7.5%'/12 会抛 TypeError。
+        # 缓存值是「数字样式的文本」（如 '12.5%'、'1,280'）-> 参与运算前先数值化，
+        # 复现 Excel 的隐式转换，否则 '12.5%'/12 会抛 TypeError。
         if getattr(c, "cached_numeric_text", False):
             expr = f"_n({expr})"
         return expr

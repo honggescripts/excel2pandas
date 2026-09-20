@@ -254,7 +254,7 @@ def _render_code(model, order, results, ctx, pk_name, pk_letter, input_cols,
         if isinstance(v, str) and v.strip().upper() in R.EXCEL_ERRORS:
             A(f'    "{c.name}": np.nan,   # 模板里的原值是 {v}')
             continue
-        # 数字样式的文本（'7.5%' / '3,900'）一律还原成数值
+        # 数字样式的文本（'12.5%' / '1,280'）一律还原成数值
         nv = R.parse_numeric_text(v)
         if nv is not None:
             A(f'    "{c.name}": {nv!r},   # 模板里原样是 {v!r}')

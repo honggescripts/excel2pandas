@@ -51,10 +51,10 @@ def is_excel_error(v: Any) -> bool:
 
 
 def parse_numeric_text(v: Any) -> Optional[float]:
-    """'7.5%' -> 0.075、'3,900' -> 3900.0；不是数字文本则 None。
+    """'12.5%' -> 0.125、'1,280' -> 1280.0；不是数字文本则 None。
 
     Excel 在算术运算里会隐式把这类文本转成数字，
-    生成代码必须复现这个行为，否则 '7.5%'/12 会直接抛 TypeError。
+    生成代码必须复现这个行为，否则 '12.5%'/12 会直接抛 TypeError。
     """
     if not isinstance(v, str):
         return None

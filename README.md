@@ -498,7 +498,7 @@ def _f_my_func(args, node, ctx):
 |---|---|---|
 | 1 | **`_xlfn.` 前缀** | openpyxl 读新版函数带前缀（`_xlfn.XLOOKUP`）。不剥掉，**所有 XLOOKUP 一个都转不了** |
 | 2 | **越界 `VLOOKUP`** | `VLOOKUP(A2,运费价目!B:C,3,0)` —— `B:C` 只有 2 列却取第 3 列，Excel 返回 `#REF!`。生成器按「从起始列偏移 2 列」自动纠正，并在报告里提示人工确认 |
-| 3 | **文本数字隐式转换** | 单元格存文本 `'7.5%'` 时 Excel 参与算术会隐式转 `0.075`，Python 直接 `TypeError`。生成器**只在「缓存值本身就是数字样式文本」的列上**加数值化包装，不滥用 |
+| 3 | **文本数字隐式转换** | 单元格存文本 `'12.5%'` 时 Excel 参与算术会隐式转 `0.125`，Python 直接 `TypeError`。生成器**只在「缓存值本身就是数字样式文本」的列上**加数值化包装，不滥用 |
 | 4 | **无匹配语义不同** | `SUMIFS/COUNTIFS/MAXIFS/MINIFS` 无匹配返回 `0`；`AVERAGEIFS` 返回 `#DIV/0!`；`XLOOKUP/VLOOKUP` 返回 `#N/A`。混同会让批量结果整片变 NaN |
 | 5 | **`ROUND` 不是 numpy 的 round** | Excel 是「四舍五入远离零」（`ROUND(2.5,0)=3`），numpy 是银行家舍入（`=2`）。运行时用 `_round`/`_roundup`/`_rounddown` 复现 Excel 语义 |
 | 6 | **Excel 侧错误要单独归类** | pandas 把 `#REF!`/`#N/A` 读成 `NaN`，会被误判成「空值」或「逻辑差异」。对账器额外用 openpyxl 读原始缓存值，归为 **Excel侧错误**，不计入一致率分母 |
