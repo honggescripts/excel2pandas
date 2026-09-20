@@ -29,3 +29,4 @@ probe/*.json
 # ---- 例外：examples/ 是演示案例，需要入库 ----
 !examples/result.xlsx
 !examples/progress.json
+!examples/config_names.json
