@@ -13,27 +13,34 @@ generator.py —— 编排 + 渲染 + 缓存（原 generator + CLI 编排）
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from . import converter as C
 from . import reader as R
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
+
+# 生成代码的 runtime 嵌入模式
+RUNTIME_MODES = ("minimal", "full")
 
 
 # ---------------------------------------------------------------- 缓存
 
 
-def excel_fingerprint(path: str | Path, sheet: str, target_row: int) -> str:
+def excel_fingerprint(path: str | Path, sheet: str, target_row: int,
+                      runtime_mode: str = "minimal") -> str:
     p = Path(path)
     st = p.stat()
     h = hashlib.sha256()
-    h.update(f"{p.resolve()}|{st.st_size}|{int(st.st_mtime)}|{sheet}|{target_row}|{VERSION}".encode())
+    h.update(f"{p.resolve()}|{st.st_size}|{int(st.st_mtime)}|{sheet}|{target_row}"
+             f"|{runtime_mode}|{VERSION}".encode())
     return h.hexdigest()[:16]
 
 
@@ -71,6 +78,8 @@ class GenerateReport:
     n_success: int = 0
     n_fail: int = 0
     n_config: int = 0
+    runtime_mode: str = "minimal"
+    runtime_helpers: List[str] = field(default_factory=list)
     fingerprints: Dict[str, str] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     errors: List[Tuple[str, str, str]] = field(default_factory=list)
@@ -107,6 +116,170 @@ def _runtime_source() -> str:
     return src[i:].rstrip() + "\n"
 
 
+# ---------------------------------------------------------------- 按需嵌入
+#
+# 生成代码必须**自包含**：helper 源码一律内联，绝不出现 `from excel2pandas import ...`。
+# 在「全量内联」之上再加一层「按需内联」——只嵌正文真正调用到的 helper。
+#
+# 关键取舍：**不手工维护依赖表**。
+#   `DEFAULT_CONFIG_NAMES` 那类「注册表 → helper」的映射表一旦与实现脱节，就会漏嵌，
+#   而漏嵌的后果是生成代码在运行时抛 NameError（用户拿到文件才炸）。
+#   这里改成从**已渲染的正文**出发做不动点推导：
+#     ① 扫正文里出现的 `_xxx` 标识符 → 命中哪个单元就收哪个
+#     ② 把该单元源码也纳入扫描面 → 递归补齐它的依赖
+#     ③ 直到不再有新增（闭包完备性由构造保证，而不是靠人记得住）
+#   收完再做一次「调用了但没找到」的检查，命中就**在生成期报错**，而不是留下隐患。
+
+_RUNTIME_START = "import datetime as _dt"
+
+# 恒定的两个基础包；_dt / _re / _nf 视实际用到的 helper 决定
+_RUNTIME_CORE_IMPORTS = ["import numpy as np", "import pandas as pd"]
+
+# 这几个是 import 别名，不是 helper
+_RUNTIME_EXT_ALIASES = {"_dt", "_re", "_nf"}
+
+
+def _strip_noise(src: str) -> str:
+    """去掉注释与字符串内容，只留标识符骨架。
+
+    不能直接对源码做正则：注释和 docstring 里出现的 `_xxx`（例如「# 用 _round 处理」）
+    会造成误命中，从而多嵌一堆用不到的函数。
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return re.sub(r"#[^\n]*", "", src)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            node.value = ""
+    try:
+        return ast.unparse(tree)
+    except Exception:   # pragma: no cover - 兜底，不该发生
+        return re.sub(r"#[^\n]*", "", src)
+
+
+def _module_level_names(src: str) -> Set[str]:
+    """源码里模块级定义的名字（def / 赋值）。"""
+    out: Set[str] = set()
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return out
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            out.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    out.add(t.id)
+    return out
+
+
+def _runtime_parts() -> Tuple[List[str], Dict[str, str], List[str]]:
+    """把 _runtime.py 切成 (恒定代码行, {单元名: 源码}, 单元顺序)。
+
+    单元 = 顶层 `def`，或带名字的顶层赋值（模块级状态、常量表）。
+    紧邻其上的空行与注释并入该单元 —— 这样分节标题会跟着函数一起被带上。
+    """
+    src = (Path(__file__).parent / "_runtime.py").read_text(encoding="utf-8")
+    src = src[src.index(_RUNTIME_START):]
+    lines = src.splitlines(keepends=True)
+    tree = ast.parse(src)
+
+    units: Dict[str, str] = {}
+    order: List[str] = []
+    taken = [False] * len(lines)
+    prev_end = 0
+
+    for node in tree.body:
+        name: Optional[str] = None
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            name = node.name
+        elif (isinstance(node, ast.Assign) and len(node.targets) == 1
+              and isinstance(node.targets[0], ast.Name)):
+            name = node.targets[0].id
+
+        start, end = node.lineno - 1, node.end_lineno
+        if name is None:
+            prev_end = end
+            continue
+
+        while (start - 1 >= prev_end
+               and (not lines[start - 1].strip() or lines[start - 1].lstrip().startswith("#"))):
+            start -= 1
+        for i in range(start, end):
+            taken[i] = True
+        units[name] = "".join(lines[start:end]).rstrip() + "\n"
+        order.append(name)
+        prev_end = end
+
+    always: List[str] = []
+    for i, ln in enumerate(lines):
+        if taken[i]:
+            continue
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        if ln.startswith("import ") or ln.startswith("from "):
+            continue          # import 交给 _runtime_imports 按需生成
+        always.append(ln.rstrip())
+
+    return always, units, order
+
+
+def _runtime_imports(scan: str) -> List[str]:
+    """按实际用到的 helper 决定 import 哪些包。"""
+    out = list(_RUNTIME_CORE_IMPORTS)
+    if re.search(r"\b_dt\.", scan):
+        out.append("import datetime as _dt")
+    if re.search(r"\b_re\.", scan):
+        out.append("import re as _re")
+    if re.search(r"\b_nf\.", scan):
+        out.append("import numpy_financial as _nf")
+    return out
+
+
+def _render_runtime(body: str, mode: str = "minimal"
+                    ) -> Tuple[List[str], str, List[str], int]:
+    """渲染 runtime 段。
+
+    → (import 行, runtime 源码, 内联的 helper 名列表, 行数)
+    """
+    if mode == "full":
+        text = _runtime_source()
+        return [], text, [], text.count("\n") + 1
+
+    always, units, order = _runtime_parts()
+
+    scan = _strip_noise(body)
+    chosen: Set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for name in order:
+            if name in chosen:
+                continue
+            if re.search(r"\b" + re.escape(name) + r"\b", scan):
+                chosen.add(name)
+                scan += "\n" + _strip_noise(units[name]) + "\n"
+                changed = True
+
+    # 兜底：正文调用了、但 runtime 里没有 —— 生成期直接报错，不留 NameError 给用户
+    defined = _module_level_names(body)
+    missing = sorted({n for n in re.findall(r"\b(_[A-Za-z]\w*)\s*\(", scan)
+                      if n not in chosen and n not in defined
+                      and n not in _RUNTIME_EXT_ALIASES})
+    if missing:
+        raise RuntimeError(
+            f"按需嵌入失败：正文引用了 _runtime.py 里不存在的辅助函数 {missing}。"
+            f"请检查拼写；或改用 generate(..., runtime_mode='full') 全量嵌入。")
+
+    names = sorted(chosen, key=order.index)
+    src = "\n".join(_runtime_imports(scan) + always)
+    src += "\n\n\n" + "\n\n\n".join(units[n].rstrip() for n in names) + "\n"
+    return [], src, names, src.count("\n") + 1
+
+
 # ---------------------------------------------------------------- 生成
 
 
@@ -120,17 +293,21 @@ def generate(
     scan_external: bool = False,
     config_names: Optional[Dict[str, str]] = None,
     comment_mode: str = "excel",
+    runtime_mode: str = "minimal",
 ) -> GenerateReport:
+    if runtime_mode not in RUNTIME_MODES:
+        raise ValueError(f"runtime_mode 只能是 {RUNTIME_MODES}，收到 {runtime_mode!r}")
     out = Path(out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
 
-    fp = excel_fingerprint(excel_path, sheet_name, target_row)
+    fp = excel_fingerprint(excel_path, sheet_name, target_row, runtime_mode)
     cache = _load_cache(out)
     if not force and cache.get("fingerprint") == fp and (out / "generated_code.py").exists():
         return GenerateReport(skipped=True, out_dir=str(out), fingerprints={"excel": fp},
                               code_path=str(out / "generated_code.py"))
 
-    rep = GenerateReport(out_dir=str(out), fingerprints={"excel": fp})
+    rep = GenerateReport(out_dir=str(out), fingerprints={"excel": fp},
+                         runtime_mode=runtime_mode)
 
     # ---- Step 1-3: reader（读 + 分层 + 评估）----
     model = R.read_model(excel_path, sheet_name, target_row=target_row,
@@ -166,8 +343,9 @@ def generate(
     fail_cols = [c.name for c in model.columns
                  if c.formula and not results.get(c.letter, C.ConvertResult(c.letter, c.name, c.layer)).success]
 
-    code = _render_code(model, order, results, ctx, pk_name, pk_letter,
-                        input_cols, fail_cols, comment_mode)
+    code, rt_names = _render_code(model, order, results, ctx, pk_name, pk_letter,
+                                  input_cols, fail_cols, comment_mode, runtime_mode)
+    rep.runtime_helpers = rt_names
     code_path = out / "generated_code.py"
     code_path.write_text(code, encoding="utf-8")
     rep.code_path = str(code_path)
@@ -193,7 +371,8 @@ def generate(
 
 
 def _render_code(model, order, results, ctx, pk_name, pk_letter, input_cols,
-                 fail_cols, comment_mode) -> str:
+                 fail_cols, comment_mode, runtime_mode="minimal"
+                 ) -> Tuple[str, List[str]]:
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     L: List[str] = []
     A = L.append
@@ -216,12 +395,7 @@ def _render_code(model, order, results, ctx, pk_name, pk_letter, input_cols,
     A(f"# 分层冲突   : {len(model.conflicts)} 处 → 执行顺序由全局拓扑排序决定")
     A(f"# 主键列     : {pk_letter or '-'} {pk_name or ''}")
     A("# " + "=" * 72)
-    A("")
-    A("import numpy as np")
-    A("import pandas as pd")
-    A("import numpy_financial as nf  # noqa: F401  （_runtime 里的财务函数用）")
-    A("")
-    A("")
+    hdr_end = len(L)        # runtime 段的信息行，等闭包算完再插进来
     A("# 源文件路径：换数据源只改这里")
     A("FILE_PATHS = {")
     A(f'    "main": r"{model.path}",')
@@ -279,12 +453,10 @@ def _render_code(model, order, results, ctx, pk_name, pk_letter, input_cols,
     A("_FAIL_COLS = " + repr(fail_cols))
     A("")
     A("")
-    A("# " + "=" * 72)
-    A("# 运行时辅助库（自包含，无需安装 excel2pandas）")
-    A("# " + "=" * 72)
-    A(_runtime_source())
-    A("")
-    A("")
+    # ---- 正文切到独立列表：runtime 段要等正文渲染完才能裁剪 ----
+    B: List[str] = []
+    A = B.append
+
     # ---- 数据层 ----
     A("def _load_target(file_paths, primary_values):")
     A('    """读回模板 sheet 里这些主键对应的行（手填输入 + 失败列兜底值）。"""')
@@ -400,7 +572,35 @@ def _render_code(model, order, results, ctx, pk_name, pk_letter, input_cols,
     A("    _out = calc(_keys)")
     A("    print(_out.T)")
     A("")
-    return "\n".join(L)
+
+    # ---- runtime 段：按正文实际用到的 helper 裁剪后内联 ----
+    rt_imports, rt_src, rt_names, rt_lines = _render_runtime("\n".join(B), runtime_mode)
+
+    info: List[str] = []
+    if runtime_mode == "full":
+        info.append("# 渲染模式   : full —— 全量内联 runtime（最保险，文件最长）")
+    else:
+        info.append(f"# 渲染模式   : minimal —— 只内联正文用到的 {len(rt_names)} 个 helper")
+        info.append('#              要全量嵌入：generate(..., runtime_mode="full")')
+    info.append("# 内联 helper: " + ("、".join(rt_names) if rt_names else "（全量，不裁剪）"))
+    info.append(f"# runtime 行数: {rt_lines}")
+    deps = "pip install numpy pandas"
+    if runtime_mode == "full" or any("numpy_financial" in x for x in rt_imports):
+        deps += " numpy_financial"
+    info.append(f"# 外部依赖   : {deps}")
+    info.append("#              本文件自包含，**不需要**安装 excel2pandas")
+
+    rt_block = ["", "",
+                "# " + "=" * 72,
+                f"# 运行时辅助库（内联，自包含 —— {rt_lines} 行）",
+                "# " + "=" * 72]
+    rt_block += rt_src.rstrip("\n").split("\n")
+
+    final = (L[:hdr_end] + info + [""]
+             + rt_imports + ["", ""]
+             + L[hdr_end:]
+             + rt_block + [""] + B)
+    return "\n".join(final), rt_names
 
 
 # ---------------------------------------------------------------- 渲染 CONFIG 文档

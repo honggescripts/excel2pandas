@@ -9,6 +9,7 @@
 3. 路径归一化              把生成产物里的本机绝对路径改写为仓库内相对路径
 4. verify                  生成代码 vs 模板缓存值 逐格对账
 5. run --keys              批量跑 keys.csv
+6. tests/                  单元测试 + 生成代码自包含验证
 
 用法
 ----
@@ -113,6 +114,14 @@ def main():
     for junk in (HERE / ".excel2pandas_cache.json",):
         if junk.exists():
             junk.unlink()
+
+    print()
+    print("=" * 64)
+    print("⑥ 单元测试 + 自包含验证")
+    print("=" * 64)
+    for t in ("tests/test_runtime.py", "tests/test_selfcontained.py"):
+        print(f"\n--- {t} ---")
+        subprocess.run([sys.executable, t], cwd=str(ROOT), env=_env(), check=True)
 
     print()
     print("=" * 64)

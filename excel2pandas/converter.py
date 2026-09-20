@@ -448,6 +448,27 @@ def _join(args: Sequence[str], sep: str) -> str:
     return sep.join(f"({a})" for a in args)
 
 
+_STR_LIT_RE = re.compile(r"""^(?:'([^']*)'|"([^"]*)")$""", re.S)
+_NUM_LIT_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
+
+
+def _literal_str(expr: str) -> Optional[str]:
+    """渲染后的表达式若是字符串字面量，取回它的值；否则 None。
+
+    渲染侧走 repr()，所以字面量一定带引号；带引号才能判定，动态表达式返回 None。
+    """
+    m = _STR_LIT_RE.match(expr.strip())
+    if not m:
+        return None
+    return m.group(1) if m.group(1) is not None else m.group(2)
+
+
+def _literal_num(expr: str) -> Optional[float]:
+    """渲染后的表达式若是数字字面量，取回它的值；否则 None。"""
+    s = expr.strip()
+    return float(s) if _NUM_LIT_RE.match(s) else None
+
+
 @register_function("ABS")
 def _f_abs(a, n, c): return f"np.abs({a[0]})"
 
@@ -581,9 +602,154 @@ def _f_ipmt(a, n, c): return f"_ipmt({', '.join(a)})"
 @register_function("CUMIPMT")
 def _f_cumipmt(a, n, c): return f"_cumipmt({', '.join(a)})"
 
+# ---- 日期 ----
+#
+# 返回 datetime64（pandas 原生），不是 Excel 序列号：对账时 Excel 侧单元格需为日期格式，
+# 否则会出现「值相同但类型不同」的假不一致。
+
+@register_function("DATE")
+def _f_date(a, n, c):
+    if len(a) != 3:
+        raise FormulaError("DATE 需要 3 个参数（年, 月, 日）")
+    return f"_date({a[0]}, {a[1]}, {a[2]})"
+
+
+@register_function("YEAR")
+def _f_year(a, n, c): return f"_datepart({a[0]}, 'year')"
+
+
+@register_function("MONTH")
+def _f_month(a, n, c): return f"_datepart({a[0]}, 'month')"
+
+
+@register_function("DAY")
+def _f_day(a, n, c): return f"_datepart({a[0]}, 'day')"
+
+
+@register_function("EOMONTH")
+def _f_eomonth(a, n, c):
+    if not a:
+        raise FormulaError("EOMONTH 至少需要 1 个参数")
+    return f"_eomonth({a[0]}, {a[1] if len(a) > 1 else '0'})"
+
+
+@register_function("EDATE")
+def _f_edate(a, n, c):
+    if not a:
+        raise FormulaError("EDATE 至少需要 1 个参数")
+    return f"_edate({a[0]}, {a[1] if len(a) > 1 else '0'})"
+
+
+@register_function("DAYS360")
+def _f_days360(a, n, c):
+    if len(a) < 2:
+        raise FormulaError("DAYS360 至少需要 2 个参数")
+    return f"_days360({a[0]}, {a[1]}, {a[2] if len(a) > 2 else 'False'})"
+
+
+@register_function("YEARFRAC")
+def _f_yearfrac(a, n, c):
+    if len(a) < 2:
+        raise FormulaError("YEARFRAC 至少需要 2 个参数")
+    basis = _literal_num(a[2]) if len(a) > 2 else 0.0
+    if basis is not None and int(round(basis)) == 1:
+        raise FormulaError(
+            "YEARFRAC basis=1（Actual/Actual）未实现：该口径含与版本相关的闰年边界规则，"
+            "不能靠猜；请改用 basis=0/2/3/4，或把该列留作人工维护")
+    return f"_yearfrac({a[0]}, {a[1]}, {a[2] if len(a) > 2 else '0'})"
+
+
+@register_function("NETWORKDAYS")
+def _f_networkdays(a, n, c):
+    if len(a) < 2:
+        raise FormulaError("NETWORKDAYS 至少需要 2 个参数")
+    return f"_networkdays({a[0]}, {a[1]}, {a[2] if len(a) > 2 else 'None'})"
+
+
+@register_function("WORKDAY")
+def _f_workday(a, n, c):
+    if len(a) < 2:
+        raise FormulaError("WORKDAY 至少需要 2 个参数")
+    return f"_workday({a[0]}, {a[1]}, {a[2] if len(a) > 2 else 'None'})"
+
+
+# Excel WEEKNUM 支持的类型全集：1/2/11~17/21
+_WEEKNUM_TYPES = {1, 2, 11, 12, 13, 14, 15, 16, 17, 21}
+
+
+@register_function("WEEKNUM")
+def _f_weeknum(a, n, c):
+    if not a:
+        raise FormulaError("WEEKNUM 至少需要 1 个参数")
+    t = _literal_num(a[1]) if len(a) > 1 else 1.0
+    if t is not None and int(round(t)) not in _WEEKNUM_TYPES:
+        raise FormulaError(f"WEEKNUM 的 type={int(round(t))} 不是 Excel 支持的类型")
+    return f"_weeknum({a[0]}, {a[1] if len(a) > 1 else '1'})"
+
+
+# ---- 数学 ----
+
+@register_function("MROUND")
+def _f_mround(a, n, c):
+    if len(a) != 2:
+        raise FormulaError("MROUND 需要 2 个参数（数值, 倍数）")
+    return f"_mround({a[0]}, {a[1]})"
+
+
+# ---- 文本 ----
+
+@register_function("TEXTJOIN")
+def _f_textjoin(a, n, c):
+    if len(a) < 3:
+        raise FormulaError("TEXTJOIN 至少需要 3 个参数（分隔符, 是否忽略空, 值…）")
+    return f"_textjoin({a[0]}, {a[1]}, [{', '.join(a[2:])}])"
+
+
+@register_function("SUBSTITUTE")
+def _f_substitute(a, n, c):
+    if len(a) < 3:
+        raise FormulaError("SUBSTITUTE 至少需要 3 个参数（文本, 旧, 新, [第几次]）")
+    tail = f", {a[3]}" if len(a) > 3 else ""
+    return f"_substitute({a[0]}, {a[1]}, {a[2]}{tail})"
+
+
+@register_function("PROPER")
+def _f_proper(a, n, c): return f"_proper({a[0]})"
+
+
+@register_function("EXACT")
+def _f_exact(a, n, c):
+    if len(a) != 2:
+        raise FormulaError("EXACT 需要 2 个参数")
+    return f"_exact({a[0]}, {a[1]})"
+
+
+# TEXT：Excel 的格式代码空间几乎没有边界，这里只实现一个**明确的子集**。
+# 关键取舍：不支持的格式在**转换期**就报错（该列照常进「失败列」报告），
+# 而不是运行时才崩、更不是静默算出一个错的字符串。
+_TEXT_ALLOWED = {
+    # 数值
+    "0", "0.0", "0.00", "0.000", "0.0000",
+    "#,##0", "#,##0.0", "#,##0.00", "#,##0.000",
+    # 百分比
+    "0%", "0.0%", "0.00%", "#,##0%",
+    # 日期
+    "yyyy-mm-dd", "yyyy/m/d", "m/d/yyyy", "mm/dd/yyyy",
+    "yyyy-mm", "yyyy", "yyyy年m月d日", "yyyy年m月",
+}
+
+
 @register_function("TEXT")
 def _f_text(a, n, c):
-    raise FormulaError("不支持 TEXT 格式化（格式化规则无法自动翻译）")
+    if len(a) != 2:
+        raise FormulaError("TEXT 需要 2 个参数（值, 格式）")
+    lit = _literal_str(a[1])
+    if lit is None:
+        raise FormulaError("TEXT 的格式参数必须是字符串字面量 —— 动态拼接的格式无法在转换期校验")
+    if lit not in _TEXT_ALLOWED:
+        raise FormulaError(
+            f"TEXT 格式 {lit!r} 不在支持的白名单内；当前支持：{'、'.join(sorted(_TEXT_ALLOWED))}")
+    return f"_text({a[0]}, {a[1]})"
 
 # ================================================================ 渲染上下文
 

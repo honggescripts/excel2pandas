@@ -45,6 +45,7 @@ def cmd_generate(args) -> int:
         scan_external=args.scan_external,
         config_names=names,
         comment_mode=args.comments,
+        runtime_mode=args.runtime_mode,
     )
     if rep.skipped:
         print("[cache] 命中缓存，未重新生成（--force 可绕过）")
@@ -55,6 +56,8 @@ def cmd_generate(args) -> int:
     print(f"     列数      : {rep.n_columns}（公式 {rep.n_formula} / 数据 {rep.n_data}）")
     print(f"     转换成功  : {rep.n_success}    失败: {rep.n_fail}")
     print(f"     CONFIG    : {rep.n_config} 个常量")
+    print(f"     runtime   : {rep.runtime_mode}"
+          f"（内联 {len(rep.runtime_helpers)} 个 helper）")
     print(f"     generated_code.py   {rep.code_path}")
     print(f"     business_rules.md   {rep.rules_path}")
     print(f"     migration_report.md {rep.migration_path}")
@@ -139,6 +142,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--force", action="store_true", help="绕过缓存强制重新生成")
     g.add_argument("--scan-external", action="store_true", help="统计外部表行数（慢）")
     g.add_argument("--comments", default="excel", choices=["excel", "both", "none"])
+    g.add_argument("--runtime-mode", default="minimal", choices=["minimal", "full"],
+                   help="minimal=只内联用到的 helper（默认）；full=全量内联（回退用）")
     g.set_defaults(func=cmd_generate)
 
     r = sub.add_parser("run", help="运行生成的代码")

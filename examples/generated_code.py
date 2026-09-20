@@ -1,9 +1,9 @@
 # ========================================================================
-# 自动生成 by excel2pandas 0.1.0
+# 自动生成 by excel2pandas 0.2.0
 # 源文件   : examples\demo_template.xlsx
 # Sheet    : 定价测算
 # 表头行   : 1    样板行: 2
-# 生成时间 : 2026-09-20 15:59:22
+# 生成时间 : 2026-09-20 16:28:33
 #
 # 列分类：
 #   数据列（输入参数）:   8 列
@@ -14,10 +14,13 @@
 # 分层冲突   : 0 处 → 执行顺序由全局拓扑排序决定
 # 主键列     : A 商品编号
 # ========================================================================
+# 渲染模式   : minimal —— 只内联正文用到的 20 个 helper
+#              要全量嵌入：generate(..., runtime_mode="full")
+# 内联 helper: _FILE_PATHS、_HEADER_ROW、_NROW、_SHEET_CACHE、_XLSX、_ERROR_STRINGS、_unbox、_fit、_num、_book、_parse、_sheet、_pick、_lookup、_is_arr、_bool、_if、_div、_round、_ceiling
+# runtime 行数: 201
+# 外部依赖   : pip install numpy pandas
+#              本文件自包含，**不需要**安装 excel2pandas
 
-import numpy as np
-import pandas as pd
-import numpy_financial as nf  # noqa: F401  （_runtime 里的财务函数用）
 
 
 # 源文件路径：换数据源只改这里
@@ -70,38 +73,38 @@ _TARGET_POS  = [0, 1, 2, 3, 4, 5, 9, 11]
 _FAIL_COLS = []
 
 
-# ========================================================================
-# 运行时辅助库（自包含，无需安装 excel2pandas）
-# ========================================================================
-import datetime as _dt
-import re as _re
 
+
+# ========================================================================
+# 运行时辅助库（内联，自包含 —— 201 行）
+# ========================================================================
 import numpy as np
-import numpy_financial as _nf
 import pandas as pd
+
+
 
 # ---- 由 calc() 在运行期注入的模块级状态 ----
 _FILE_PATHS = {}
+
+
 _HEADER_ROW = 1
-_TARGET_ROW = 2
+
+
 _NROW = 1
+
+
 _SHEET_CACHE = {}
+
+
 _XLSX = None      # 复用同一个工作簿句柄 —— 否则每读一个 sheet 都要重开整个工作簿
+
+
 
 # Excel 错误值字符串：读进来的数据里可能混着这些，统一清洗成 NaN，
 # 否则它们会以 str 形式漏进数值运算，直接炸掉。
 _ERROR_STRINGS = ["#REF!", "#N/A", "#DIV/0!", "#VALUE!", "#NUM!", "#NAME?", "#NULL!", "#SPILL!", "#CALC!"]
 
 
-def _clean(s):
-    """把 Excel 错误值字符串清洗成 NaN。"""
-    if isinstance(s, pd.Series):
-        if s.dtype.kind in "OSU":
-            return s.replace(_ERROR_STRINGS, np.nan)
-        return s
-    if isinstance(s, np.ndarray) and s.dtype.kind in "OSU":
-        return pd.Series(s).replace(_ERROR_STRINGS, np.nan).to_numpy()
-    return s
 
 
 
@@ -114,6 +117,8 @@ def _unbox(x):
     return np.asarray(x)
 
 
+
+
 def _fit(x, n=None):
     """把标量广播到长度 n。"""
     n = _NROW if n is None else n
@@ -123,11 +128,6 @@ def _fit(x, n=None):
     return a
 
 
-def _obj(x):
-    a = _unbox(x)
-    if a.ndim == 0:
-        return np.full(_NROW, a.item() if a.dtype != object else None, dtype=object)
-    return a.astype(object)
 
 
 def _num(x):
@@ -139,19 +139,6 @@ def _num(x):
     return a.astype(float)
 
 
-def _n(x):
-    """Excel 的隐式数值转换：'12.5%' -> 0.125、'1,280' -> 1280。
-
-    只在「缓存值本身就是数字样式文本」的列上由生成器自动加壳，不滥用。
-    """
-    a = _unbox(x)
-    if a.dtype.kind in "iufc":
-        return a
-    s = pd.Series(np.atleast_1d(a)).astype(object).astype(str).str.strip()
-    pct = s.str.endswith("%").to_numpy()
-    base = s.str.rstrip("%").str.replace(",", "", regex=False)
-    num = pd.to_numeric(base, errors="coerce").to_numpy(dtype=float)
-    return np.where(pct, num / 100.0, num)
 
 
 # ================================================================ 数据源
@@ -164,12 +151,16 @@ def _book():
     return _XLSX
 
 
+
+
 def _parse(sheet_name, **kw):
     d = _book().parse(sheet_name=sheet_name, **kw)
     for c in d.columns:
         if d[c].dtype.kind in "OSU":
             d[c] = d[c].replace(_ERROR_STRINGS, np.nan)
     return d
+
+
 
 
 def _sheet(name):
@@ -179,11 +170,15 @@ def _sheet(name):
     return _SHEET_CACHE[name]
 
 
+
+
 def _pick(src, letter):
     """按 Excel 列字母取列（位置寻址，免疫表头重名/空表头）。"""
     from openpyxl.utils import column_index_from_string
 
     return src.iloc[:, column_index_from_string(letter) - 1]
+
+
 
 
 # ================================================================ 查找 / 聚合
@@ -210,43 +205,6 @@ def _lookup(src, key, val, keys, not_found=None):
     return out.to_numpy()
 
 
-def _aggif(src, val, pairs, how="sum"):
-    """SUMIFS / COUNTIFS / AVERAGEIFS / MAXIFS / MINIFS 的统一实现。
-
-    注意 Excel 语义差异（踩过坑）：
-      · SUMIFS / COUNTIFS / MAXIFS / MINIFS 无匹配时返回 **0**（不是空）
-      · AVERAGEIFS 无匹配时返回 #DIV/0!（用 NaN 表示）
-    这与 XLOOKUP/VLOOKUP 无匹配返回 #N/A 的行为不同。
-    """
-    dfm = pd.DataFrame()
-    keycols = []
-    for i, (kl, _kv) in enumerate(pairs):
-        col = f"__k{i}"
-        dfm[col] = np.asarray(_unbox(_pick(src, kl)), dtype=object)
-        keycols.append(col)
-
-    if how == "size":
-        res = dfm.dropna(subset=keycols).groupby(keycols, dropna=False).size()
-    else:
-        dfm["__v"] = _num(_pick(src, val))
-        res = dfm.dropna(subset=keycols).groupby(keycols, dropna=False)["__v"].agg(how)
-
-    K = [np.asarray(_fit(_unbox(kv)), dtype=object) for _kl, kv in pairs]
-    if len(K) == 1:
-        idx = pd.Index(K[0])
-    else:
-        idx = pd.MultiIndex.from_arrays(K)
-    try:
-        out = res.reindex(idx).to_numpy(dtype=float)
-    except (TypeError, KeyError, ValueError):
-        out = np.full(_NROW, np.nan)
-
-    if len(out) != _NROW:
-        out = np.full(_NROW, np.nan)
-    if how in ("sum", "size", "max", "min"):
-        # Excel：无匹配返回 0
-        out = np.where(pd.isna(out), 0.0, out)
-    return out
 
 
 # ================================================================ 逻辑
@@ -255,43 +213,14 @@ def _is_arr(x):
     return isinstance(x, (np.ndarray, pd.Series, pd.Index, list, tuple))
 
 
-def _scalar_eq(x, y):
-    if x is None or y is None:
-        return False
-    for v in (x, y):
-        if isinstance(v, float) and v != v:
-            return False
-        if isinstance(v, (np.floating,)) and np.isnan(v):
-            return False
-    if isinstance(x, (bool, np.bool_)) and isinstance(y, (bool, np.bool_)):
-        return bool(x) == bool(y)
-    if isinstance(x, str) and isinstance(y, str):
-        return x.strip() == y.strip()
-    try:
-        return float(x) == float(y)
-    except (TypeError, ValueError):
-        return str(x) == str(y)
-
-
-def _eq(a, b):
-    """Excel 的 `=`（含类型宽松比较）。"""
-    if _is_arr(a) or _is_arr(b):
-        A = _obj(a) if _is_arr(a) else _fit(a)
-        B = _obj(b) if _is_arr(b) else _fit(b)
-        A, B = np.broadcast_arrays(A, B)
-        return np.array([_scalar_eq(x, y) for x, y in zip(A.ravel(), B.ravel())],
-                        dtype=bool).reshape(A.shape)
-    return _scalar_eq(a, b)
-
-
-def _ne(a, b):
-    return ~_eq(a, b)
 
 
 def _bool(x):
     if _is_arr(x):
         return _unbox(x).astype(bool)
     return bool(x)
+
+
 
 
 def _if(cond, a, b):
@@ -309,40 +238,6 @@ def _if(cond, a, b):
     return out
 
 
-def _and(items):
-    if any(_is_arr(x) for x in items):
-        n = _NROW
-        out = np.ones(n, dtype=bool)
-        for x in items:
-            out &= np.asarray(_bool(_fit(x, n)), dtype=bool)
-        return out
-    return all(bool(x) for x in items)
-
-
-def _or(items):
-    if any(_is_arr(x) for x in items):
-        n = _NROW
-        out = np.zeros(n, dtype=bool)
-        for x in items:
-            out |= np.asarray(_bool(_fit(x, n)), dtype=bool)
-        return out
-    return any(bool(x) for x in items)
-
-
-def _iferror(a, b):
-    try:
-        if _is_arr(a):
-            arr = _unbox(a)
-            if arr.dtype.kind == "f":
-                bad = ~np.isfinite(arr)
-                if bad.any():
-                    return np.where(bad, np.asarray(_fit(b), dtype=float), arr)
-            return arr
-        if a is None or (isinstance(a, float) and a != a):
-            return b
-        return a
-    except Exception:
-        return b
 
 
 # ================================================================ 数学
@@ -358,6 +253,8 @@ def _div(a, b):
     return out
 
 
+
+
 def _round(x, n=0):
     """Excel ROUND：四舍五入「远离零」，与 numpy 的银行家舍入不同。"""
     V = _num(x)
@@ -366,236 +263,21 @@ def _round(x, n=0):
     return out.item() if out.ndim == 0 else out
 
 
-def _roundup(x, n=0):
-    V = _num(x)
-    f = 10.0 ** float(n)
-    out = np.sign(V) * np.ceil(np.abs(V) * f) / f
-    return out.item() if out.ndim == 0 else out
-
-
-def _rounddown(x, n=0):
-    V = _num(x)
-    f = 10.0 ** float(n)
-    out = np.sign(V) * np.floor(np.abs(V) * f) / f
-    return out.item() if out.ndim == 0 else out
 
 
 def _ceiling(x, n):
+    """Excel CEILING：向**远离零**方向取整到倍数。
+
+    ⚠️ 不能写成 np.ceil(V/N)*N —— 那个是"向正无穷"，对负数是错的：
+       Excel CEILING(-2.1, 1) = -3（远离零），np.ceil 给的是 -2。
+    """
     V = _num(x)
     N = _num(n)
     if N.ndim == 0 and N == 0:
         return np.zeros_like(V)
     with np.errstate(divide="ignore", invalid="ignore"):
-        out = np.ceil(V / N) * N
+        out = np.sign(V) * np.ceil(np.abs(V / N)) * np.abs(N)
     return out.item() if out.ndim == 0 else out
-
-
-def _floor_(x, n):
-    V = _num(x)
-    N = _num(n)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        out = np.floor(V / N) * N
-    return out.item() if out.ndim == 0 else out
-
-
-def _psum(items):
-    arrs = [_num(x) for x in items]
-    if all(a.ndim == 0 for a in arrs):
-        return float(np.sum(arrs))
-    return np.nansum(np.stack(np.broadcast_arrays(*arrs)), axis=0)
-
-
-def _pprod(items):
-    arrs = [_num(x) for x in items]
-    if all(a.ndim == 0 for a in arrs):
-        return float(np.prod(arrs))
-    return np.nanprod(np.stack(np.broadcast_arrays(*arrs)), axis=0)
-
-
-def _pmax(items):
-    arrs = [_num(x) for x in items]
-    if all(a.ndim == 0 for a in arrs):
-        return float(np.max(arrs))
-    return np.nanmax(np.stack(np.broadcast_arrays(*arrs)), axis=0)
-
-
-def _pmin(items):
-    arrs = [_num(x) for x in items]
-    if all(a.ndim == 0 for a in arrs):
-        return float(np.min(arrs))
-    return np.nanmin(np.stack(np.broadcast_arrays(*arrs)), axis=0)
-
-
-def _map(key, table, default=np.nan):
-    """嵌套 IF 查找表 -> 字典映射。"""
-    K = _unbox(key)
-    if K.ndim == 0:
-        K = np.full(_NROW, K.item(), dtype=object)
-    s = pd.Series(K).map(table)
-    if _is_arr(default):
-        d = np.asarray(_fit(_unbox(default)))
-        out = s.to_numpy().astype(object)
-        mask = pd.isna(out)
-        out = np.where(mask, d, out)
-        return out
-    return s.fillna(default).to_numpy()
-
-
-# ================================================================ 文本 / 转换
-
-def _xstr(x):
-    """Excel 的 `&` 语义：数字不带小数点、日期格式化、None 变空串。"""
-    a = np.atleast_1d(_unbox(x))
-    out = []
-    for v in a:
-        if v is None:
-            out.append("")
-        elif isinstance(v, (bool, np.bool_)):
-            out.append("TRUE" if v else "FALSE")
-        elif isinstance(v, (float, np.floating)):
-            if v != v:
-                out.append("")
-            elif float(v).is_integer():
-                out.append(str(int(v)))
-            else:
-                out.append(repr(float(v)))
-        elif isinstance(v, (pd.Timestamp, _dt.datetime, _dt.date)):
-            out.append(pd.Timestamp(v).strftime("%Y-%m-%d %H:%M:%S"))
-        else:
-            out.append(str(v))
-    return np.array(out, dtype=object)
-
-
-def _str(x):
-    return pd.Series(_xstr(x))
-
-
-def _cat(items):
-    if len(items) == 1:
-        return _xstr(items[0])
-    return _cat2(_cat(items[:-1]), items[-1])
-
-
-def _cat2(a, b):
-    A = _xstr(a)
-    B = _xstr(b)
-    A, B = np.broadcast_arrays(A, B)
-    return np.array([f"{x}{y}" for x, y in zip(A.ravel(), B.ravel())], dtype=object).reshape(A.shape)
-
-
-def _textbefore(x, sep):
-    a = _unbox(x)
-    if a.dtype.kind == "M":
-        s = pd.Series(a).dt.strftime("%Y-%m-%d %H:%M:%S")
-    else:
-        s = pd.Series(np.atleast_1d(a)).astype(str)
-    return s.str.split(_re.escape(str(sep))).str[0].to_numpy()
-
-
-def _textafter(x, sep):
-    a = _unbox(x)
-    if a.dtype.kind == "M":
-        s = pd.Series(a).dt.strftime("%Y-%m-%d %H:%M:%S")
-    else:
-        s = pd.Series(np.atleast_1d(a)).astype(str)
-    return s.str.split(_re.escape(str(sep))).str[-1].to_numpy()
-
-
-def _tonum(x):
-    a = _unbox(x)
-    if a.dtype.kind in "OSU":
-        return pd.to_numeric(pd.Series(np.atleast_1d(a)), errors="coerce").to_numpy()
-    return a
-
-
-def _neg2(x):
-    """Excel 的 `--x`：文本转数值 / 文本转日期。"""
-    a = _unbox(x)
-    if a.dtype.kind == "M":
-        return a
-    if a.dtype.kind in "OSU":
-        arr = np.atleast_1d(a)
-        nonnull = int(pd.notna(pd.Series(arr)).sum())
-        d = pd.to_datetime(pd.Series(arr), errors="coerce")
-        if nonnull and int(d.notna().sum()) >= nonnull:
-            return d.to_numpy()
-        return pd.to_numeric(pd.Series(arr), errors="coerce").to_numpy()
-    return a
-
-
-def _row(df):
-    return df.index.to_numpy() + _TARGET_ROW
-
-
-def _column(df, ref):
-    return np.full(len(df), np.nan)
-
-
-# ================================================================ 财务函数
-
-def _vfin(fn, args):
-    """把标量财务函数向量化；无解时返回 NaN（对应 Excel 的 #NUM!）。"""
-    arrs = [np.asarray(_num(x), dtype=float) for x in args]
-    arrs = np.broadcast_arrays(*arrs)
-    shape = arrs[0].shape
-    out = np.full(shape if shape else (), np.nan, dtype=float)
-    for idx in (np.ndindex(shape) if shape else [()]):
-        vals = tuple(float(a[idx]) for a in arrs)
-        if any(v != v for v in vals):
-            continue
-        try:
-            r = float(fn(*vals))
-        except Exception:
-            r = np.nan
-        out[idx] = r if np.isfinite(r) else np.nan
-    return out.item() if out.ndim == 0 else out
-
-
-def _rate(nper, pmt, pv, fv=0, typ=0):
-    return _vfin(lambda a, b, c, d: _nf.rate(a, b, c, d, when="begin" if typ else "end"),
-                 (nper, pmt, pv, fv))
-
-
-def _fv(rate_, nper, pmt, pv=0, typ=0):
-    return _vfin(lambda a, b, c, d: _nf.fv(a, b, c, d, when="begin" if typ else "end"),
-                 (rate_, nper, pmt, pv))
-
-
-def _pv(rate_, nper, pmt, fv=0, typ=0):
-    return _vfin(lambda a, b, c, d: _nf.pv(a, b, c, d, when="begin" if typ else "end"),
-                 (rate_, nper, pmt, fv))
-
-
-def _pmt(rate_, nper, pv, fv=0, typ=0):
-    return _vfin(lambda a, b, c, d: _nf.pmt(a, b, c, d, when="begin" if typ else "end"),
-                 (rate_, nper, pv, fv))
-
-
-def _nper(rate_, pmt, pv, fv=0, typ=0):
-    return _vfin(lambda a, b, c, d: _nf.nper(a, b, c, d, when="begin" if typ else "end"),
-                 (rate_, pmt, pv, fv))
-
-
-def _ipmt(rate_, per, nper, pv, fv=0, typ=0):
-    return _vfin(lambda a, b, c, d: float(_nf.ipmt(a, b, c, d, fv=0,
-                                                  when="begin" if typ else "end")),
-                 (rate_, per, nper, pv))
-
-
-def _cumipmt(rate_, nper, pv, start, end, typ=0):
-    """numpy_financial 没有 cumipmt —— 用 ipmt 逐期累加实现（已实测复现 Excel）。"""
-    def one(r, n, p, s, e):
-        n_i = int(round(n))
-        s_i = int(round(s))
-        e_i = int(round(e))
-        pers = np.arange(s_i, e_i + 1)
-        if len(pers) == 0:
-            return 0.0
-        return float(np.sum(_nf.ipmt(r, pers, n_i, p, fv=0,
-                                     when="begin" if typ else "end")))
-    return _vfin(one, (rate_, nper, pv, start, end))
-
-
 
 def _load_target(file_paths, primary_values):
     """读回模板 sheet 里这些主键对应的行（手填输入 + 失败列兜底值）。"""
