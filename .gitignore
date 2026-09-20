@@ -1,0 +1,31 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ---- 本地运行产物（不进仓库）----
+output/
+result*.xlsx
+progress*.json
+failed.json
+.excel2pandas_cache.json
+# 业务参数命名映射：含具体定价参数名，放在本地，不要提交
+config_names.json
+
+# ---- 探针落盘产物（含表头/样板行原文）----
+probe_result.json
+probe/*.json
+
+# ---- 例外：examples/ 是演示案例，需要入库 ----
+!examples/result.xlsx
+!examples/progress.json

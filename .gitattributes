@@ -1,0 +1,10 @@
+# 统一换行符为 LF，避免 Windows 下把整个仓库转成 CRLF
+* text=auto eol=lf
+
+# 二进制文件不做任何换行转换
+*.xlsx binary
+*.xls  binary
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.zip  binary
